@@ -8,6 +8,7 @@ pub struct SymbolInfo {
     pub range: Range,
     pub selection_range: Range,
     pub container_name: Option<String>,
+    pub doc_comment: Option<String>,
 }
 
 impl SymbolInfo {
@@ -25,11 +26,17 @@ impl SymbolInfo {
             range,
             selection_range,
             container_name: None,
+            doc_comment: None,
         }
     }
 
     pub fn with_container(mut self, container: impl Into<String>) -> Self {
         self.container_name = Some(container.into());
+        self
+    }
+
+    pub fn with_doc(mut self, doc: impl Into<String>) -> Self {
+        self.doc_comment = Some(doc.into());
         self
     }
 }

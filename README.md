@@ -20,6 +20,7 @@ blisk was primarily created to be used with [Fresh](https://getfresh.dev), an op
 ### Heuristic-based
 1. `textDocument/definition` — same-file scope walk first, cross-file via workspace symbol index fallback
 2. `textDocument/references` — same-file tree walk + cross-file pre-filter then parse
+3. `textDocument/hover` — Scaladoc (`/** … */`) for the symbol under cursor; `[[Symbol]]` links resolved to workspace definitions; `{{{ }}}` blocks rendered as code fences
 
 ## Dependency Source Indexing
 

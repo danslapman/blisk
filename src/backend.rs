@@ -12,7 +12,7 @@ use crate::{
     capabilities,
     handlers::{
         definition, diagnostics, document_links, document_symbols,
-        folding, references, selection, semantic_tokens, workspace_symbols,
+        folding, hover, references, selection, semantic_tokens, workspace_symbols,
     },
     parsing::document::Document,
     symbols::{extract, index::WorkspaceIndex},
@@ -239,6 +239,15 @@ impl LanguageServer for Backend {
         };
         let links = document_links::document_links(&doc.tree, &doc.text);
         Ok(Some(links))
+    }
+
+    async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let pos = params.text_document_position_params.position;
+        let Some(doc) = self.documents.get(uri) else {
+            return Ok(None);
+        };
+        Ok(hover::hover(&doc.tree, &doc.text, uri, pos, &self.index))
     }
 
     async fn goto_definition(

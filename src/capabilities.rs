@@ -1,5 +1,5 @@
 use tower_lsp::lsp_types::{
-    DocumentLinkOptions, FoldingRangeProviderCapability, OneOf,
+    DocumentLinkOptions, FoldingRangeProviderCapability, HoverProviderCapability, OneOf,
     SelectionRangeProviderCapability, SemanticTokensFullOptions, SemanticTokensOptions,
     SemanticTokensServerCapabilities, ServerCapabilities, TextDocumentSyncCapability,
     TextDocumentSyncKind, TextDocumentSyncOptions, WorkDoneProgressOptions,
@@ -32,6 +32,7 @@ pub fn server_capabilities() -> ServerCapabilities {
             resolve_provider: Some(false),
             work_done_progress_options: WorkDoneProgressOptions::default(),
         }),
+        hover_provider: Some(HoverProviderCapability::Simple(true)),
         definition_provider: Some(OneOf::Left(true)),
         references_provider: Some(OneOf::Left(true)),
         ..Default::default()

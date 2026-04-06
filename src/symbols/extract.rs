@@ -1,6 +1,7 @@
 use tower_lsp::lsp_types::{DocumentSymbol, Range, SymbolKind, Url};
 use tree_sitter::{Node, Tree};
 
+use crate::parsing::doc_comments::extract_doc_comment;
 use crate::parsing::scala::{
     self, CLASS_DEF, ENUM_DEF, EXTENSION_DEF, FUNCTION_DEF, GIVEN_DEF, OBJECT_DEF, TEMPLATE_BODY,
     TRAIT_DEF, TYPE_DEF, VAL_DEF, VAR_DEF,
@@ -108,6 +109,9 @@ fn collect_symbols(
             let mut info = SymbolInfo::new(name.to_string(), sym_kind, uri.clone(), range, selection_range);
             if let Some(c) = container {
                 info = info.with_container(c);
+            }
+            if let Some(doc) = extract_doc_comment(node, source) {
+                info = info.with_doc(doc);
             }
             let name_owned = name.to_string();
             out.push(info);

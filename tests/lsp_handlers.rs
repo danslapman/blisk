@@ -1,6 +1,6 @@
 use blisk::handlers::{
-    definition, diagnostics, document_links, document_symbols, folding, references, selection,
-    semantic_tokens,
+    definition, diagnostics, document_links, document_symbols, folding, hover, references,
+    selection, semantic_tokens,
 };
 use blisk::symbols::{extract, index::WorkspaceIndex};
 use tower_lsp::lsp_types::*;
@@ -300,6 +300,154 @@ fn references_cross_file() {
     let has_usage = refs.iter().any(|l| l.uri == usage_uri);
     assert!(has_simple, "Expected Animal references in simple_class.scala");
     assert!(has_usage, "Expected Animal references in usage.scala");
+}
+
+// ---- Hover ----
+
+#[test]
+fn hover_class_with_doc() {
+    let source = include_str!("fixtures/hover_test.scala");
+    let tree = parse(source);
+    let uri = Url::parse("file:///test/hover_test.scala").unwrap();
+    let index = WorkspaceIndex::new();
+
+    // "Greeter" at line 3, char 8
+    let pos = Position { line: 3, character: 8 };
+    let result = hover::hover(&tree, source, &uri, pos, &index);
+
+    let h = result.expect("Expected hover result for 'Greeter'");
+    let markdown = match h.contents {
+        HoverContents::Markup(mc) => mc.value,
+        _ => panic!("Expected MarkupContent"),
+    };
+    assert!(markdown.contains("class Greeter"), "Missing kind label; got: {markdown}");
+    assert!(
+        markdown.contains("documented class with a greeting"),
+        "Missing doc comment text; got: {markdown}"
+    );
+}
+
+#[test]
+fn hover_method_with_param_doc() {
+    let source = include_str!("fixtures/hover_test.scala");
+    let tree = parse(source);
+    let uri = Url::parse("file:///test/hover_test.scala").unwrap();
+    let index = WorkspaceIndex::new();
+
+    // "greet" at line 11, char 6
+    let pos = Position { line: 11, character: 6 };
+    let result = hover::hover(&tree, source, &uri, pos, &index);
+
+    let h = result.expect("Expected hover result for 'greet'");
+    let markdown = match h.contents {
+        HoverContents::Markup(mc) => mc.value,
+        _ => panic!("Expected MarkupContent"),
+    };
+    assert!(markdown.contains("def greet"), "Missing kind label; got: {markdown}");
+    assert!(markdown.contains("@param name"), "Missing @param tag; got: {markdown}");
+    assert!(markdown.contains("@return"), "Missing @return tag; got: {markdown}");
+}
+
+#[test]
+fn hover_method_see_link_resolved() {
+    let source = include_str!("fixtures/hover_test.scala");
+    let tree = parse(source);
+    let uri = Url::parse("file:///test/hover_test.scala").unwrap();
+
+    // Index the file so Undocumented is resolvable
+    let index = WorkspaceIndex::new();
+    index.update_file(&uri, extract::workspace_symbols(&tree, source, &uri));
+
+    // "greet" at line 11, char 6 — its doc contains @see [[Undocumented]]
+    let pos = Position { line: 11, character: 6 };
+    let result = hover::hover(&tree, source, &uri, pos, &index);
+
+    let h = result.expect("Expected hover result for 'greet'");
+    let markdown = match h.contents {
+        HoverContents::Markup(mc) => mc.value,
+        _ => panic!("Expected MarkupContent"),
+    };
+    // [[Undocumented]] should be resolved to a clickable Markdown link
+    assert!(
+        markdown.contains("[Undocumented]"),
+        "Expected resolved [[Undocumented]] link; got: {markdown}"
+    );
+}
+
+#[test]
+fn hover_val_no_doc_shows_kind() {
+    let source = include_str!("fixtures/hover_test.scala");
+    let tree = parse(source);
+    let uri = Url::parse("file:///test/hover_test.scala").unwrap();
+    let index = WorkspaceIndex::new();
+
+    // "greeting" at line 13, char 6
+    let pos = Position { line: 13, character: 6 };
+    let result = hover::hover(&tree, source, &uri, pos, &index);
+
+    let h = result.expect("Expected hover result for 'greeting'");
+    let markdown = match h.contents {
+        HoverContents::Markup(mc) => mc.value,
+        _ => panic!("Expected MarkupContent"),
+    };
+    assert!(markdown.contains("val greeting"), "Expected 'val greeting'; got: {markdown}");
+    assert!(!markdown.contains("---"), "Unexpected doc separator for undocumented val; got: {markdown}");
+}
+
+#[test]
+fn hover_cross_file_with_doc() {
+    let hover_src = include_str!("fixtures/hover_test.scala");
+    let hover_tree = parse(hover_src);
+    let hover_uri = Url::parse("file:///test/hover_test.scala").unwrap();
+
+    let usage_src = include_str!("fixtures/usage.scala");
+    let usage_tree = parse(usage_src);
+    let usage_uri = Url::parse("file:///test/usage.scala").unwrap();
+
+    // Index hover_test.scala so Greeter (with its doc) is cross-file findable
+    let index = WorkspaceIndex::new();
+    index.update_file(
+        &hover_uri,
+        extract::workspace_symbols(&hover_tree, hover_src, &hover_uri),
+    );
+
+    // "Greeter" at line 5, char 22 in usage.scala: "    val greeter = new Greeter()"
+    let pos = Position { line: 5, character: 22 };
+    let result = hover::hover(&usage_tree, usage_src, &usage_uri, pos, &index);
+
+    let h = result.expect("Expected cross-file hover for 'Greeter'");
+    let markdown = match h.contents {
+        HoverContents::Markup(mc) => mc.value,
+        _ => panic!("Expected MarkupContent"),
+    };
+    assert!(markdown.contains("class Greeter"), "Missing kind label; got: {markdown}");
+    assert!(
+        markdown.contains("documented class with a greeting"),
+        "Missing doc comment text; got: {markdown}"
+    );
+}
+
+#[test]
+fn hover_code_block_rendered_as_fenced() {
+    let source = include_str!("fixtures/hover_test.scala");
+    let tree = parse(source);
+    let uri = Url::parse("file:///test/hover_test.scala").unwrap();
+    let index = WorkspaceIndex::new();
+
+    // "withExample" at line 27, char 4
+    let pos = Position { line: 27, character: 4 };
+    let result = hover::hover(&tree, source, &uri, pos, &index);
+
+    let h = result.expect("Expected hover result for 'withExample'");
+    let markdown = match h.contents {
+        HoverContents::Markup(mc) => mc.value,
+        _ => panic!("Expected MarkupContent"),
+    };
+    assert!(markdown.contains("def withExample"), "Missing kind label; got: {markdown}");
+    // {{{ ... }}} should be rendered as a fenced code block, not literal braces
+    assert!(!markdown.contains("{{{"), "Raw {{{{ should not appear in output; got: {markdown}");
+    assert!(markdown.contains("```"), "Expected fenced code block in output; got: {markdown}");
+    assert!(markdown.contains("g.greet"), "Expected code block content; got: {markdown}");
 }
 
 // ---- Workspace Symbols ----

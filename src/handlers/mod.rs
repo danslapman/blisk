@@ -3,6 +3,7 @@ pub mod diagnostics;
 pub mod document_links;
 pub mod document_symbols;
 pub mod folding;
+pub mod hover;
 pub mod references;
 pub mod selection;
 pub mod semantic_tokens;
