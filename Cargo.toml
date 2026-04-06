@@ -1,0 +1,13 @@
+[package]
+name = "blisk"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dashmap = "6.1.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+tokio = { version = "1.51.0", features = ["full"] }
+tower-lsp = "0.20.0"
+tree-sitter = "0.26.8"
+tree-sitter-scala = "0.25.0"
