@@ -37,7 +37,7 @@ pub async fn scan_workspace(root: Url, index: Arc<WorkspaceIndex>) {
     }
 }
 
-async fn index_file(path: &std::path::Path, index: &WorkspaceIndex) {
+pub(crate) async fn index_file(path: &std::path::Path, index: &WorkspaceIndex) {
     let text = match tokio::fs::read_to_string(path).await {
         Ok(t) => t,
         Err(_) => return,
@@ -80,7 +80,7 @@ fn collect_recursive(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
         let path = entry.path();
         if path.is_dir() {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name.starts_with('.') || name == "target" || name == "node_modules" {
+            if (name.starts_with('.') && name != ".dep-srcs") || name == "target" || name == "node_modules" {
                 continue;
             }
             collect_recursive(&path, out);

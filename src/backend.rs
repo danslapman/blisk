@@ -29,10 +29,12 @@ pub struct Backend {
     index: Arc<WorkspaceIndex>,
     /// Workspace root URI, set during initialize.
     workspace_root: tokio::sync::RwLock<Option<Url>>,
+    /// Whether to fetch and index dependency source jars on startup.
+    retrieve_src: std::sync::atomic::AtomicBool,
 }
 
 impl Backend {
-    pub fn new(client: Client) -> Self {
+    pub fn new(client: Client, fetch_dep_sources: bool) -> Self {
         let parser = create_parser().expect("Failed to create Scala parser");
         Self {
             client,
@@ -40,6 +42,7 @@ impl Backend {
             documents: DashMap::new(),
             index: Arc::new(WorkspaceIndex::new()),
             workspace_root: tokio::sync::RwLock::new(None),
+            retrieve_src: std::sync::atomic::AtomicBool::new(fetch_dep_sources),
         }
     }
 
@@ -64,6 +67,13 @@ impl LanguageServer for Backend {
             });
         *self.workspace_root.write().await = root;
 
+        if let Some(opts) = &params.initialization_options {
+            if opts.get("retrieveSrc").and_then(|v| v.as_bool()) == Some(true) {
+                self.retrieve_src
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
                 name: "blisk".to_string(),
@@ -81,9 +91,35 @@ impl LanguageServer for Backend {
 
         if let Some(root) = self.workspace_root.read().await.clone() {
             let index = self.index.clone();
+            let root_for_scan = root.clone();
             tokio::spawn(async move {
-                scan_workspace(root, index).await;
+                scan_workspace(root_for_scan, index).await;
             });
+
+            if self
+                .retrieve_src
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                if let Ok(root_path) = root.to_file_path() {
+                    let index = self.index.clone();
+                    let client = self.client.clone();
+                    tokio::spawn(async move {
+                        client
+                            .log_message(
+                                MessageType::INFO,
+                                "blisk: fetching dependency sources...",
+                            )
+                            .await;
+                        crate::deps::fetch_dep_sources(&root_path, index).await;
+                        client
+                            .log_message(
+                                MessageType::INFO,
+                                "blisk: dependency sources ready",
+                            )
+                            .await;
+                    });
+                }
+            }
         }
     }
 
