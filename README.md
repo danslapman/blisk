@@ -4,6 +4,8 @@
 
 blisk is a fast, zero-configuration Scala language server built in Rust on top of tree-sitter-scala. It requires no build tool integration and no JVM, starts instantly, and targets the sweet spot between a plain text search and a full-featured server like Metals.
 
+blisk was primarily created to be used with [Fresh](https://getfresh.dev), an open-source terminal text editor with LSP support.
+
 ## Features
 
 ### Tree-sitter (solid)
