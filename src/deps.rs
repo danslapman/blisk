@@ -8,6 +8,53 @@ use tokio::process::Command;
 use crate::symbols::index::WorkspaceIndex;
 use crate::workspace::scanner::index_file;
 
+/// Derive the extraction subdirectory for a coordinate.
+/// e.g. "org.typelevel:cats-core_3:2.9.0" → `<dep_srcs>/org.typelevel/cats-core_3/2.9.0`
+fn coord_to_subdir(dep_srcs: &Path, coord: &str) -> Option<PathBuf> {
+    let mut parts = coord.splitn(3, ':');
+    let group    = parts.next()?;
+    let artifact = parts.next()?;
+    let version  = parts.next()?;
+    if group.is_empty() || artifact.is_empty() || version.is_empty() {
+        return None;
+    }
+    Some(dep_srcs.join(group).join(artifact).join(version))
+}
+
+/// Remove source files for stale coordinates from disk and from the index.
+async fn cleanup_stale_deps(dep_srcs: &Path, stale: &HashSet<String>, index: &WorkspaceIndex) {
+    for coord in stale {
+        let Some(coord_dir) = coord_to_subdir(dep_srcs, coord) else {
+            warn!("could not derive path for stale coord {coord}, skipping");
+            continue;
+        };
+        if !coord_dir.exists() {
+            continue;
+        }
+        // Evict index entries before deleting files
+        let files = {
+            let coord_dir = coord_dir.clone();
+            tokio::task::spawn_blocking(move || {
+                let mut out = vec![];
+                collect_scala_recursive(&coord_dir, &mut out);
+                out
+            })
+            .await
+            .unwrap_or_default()
+        };
+        for path in &files {
+            if let Ok(uri) = tower_lsp::lsp_types::Url::from_file_path(path) {
+                index.remove_file(&uri);
+            }
+        }
+        if let Err(e) = tokio::fs::remove_dir_all(&coord_dir).await {
+            warn!("failed to remove stale dir {}: {e}", coord_dir.display());
+        } else {
+            info!("removed stale dep sources for {coord}");
+        }
+    }
+}
+
 /// Fetch, extract and index dependency sources into `<root>/target/.dep-srcs/`.
 /// Unpacking is incremental: already-resolved coordinates recorded in
 /// `target/.dep-srcs/.resolved.list` are skipped.
@@ -69,27 +116,42 @@ pub async fn fetch_dep_sources(root: &Path, index: Arc<WorkspaceIndex>) {
         .map(str::to_string)
         .collect();
 
-    let new_deps: Vec<String> = deps
-        .into_iter()
-        .filter(|d| !already_resolved.contains(d))
-        .collect();
+    let current_deps: HashSet<String> = deps.into_iter().collect();
+    let stale: HashSet<String> = already_resolved.difference(&current_deps).cloned().collect();
+    let new_deps: Vec<String> = current_deps.difference(&already_resolved).cloned().collect();
 
-    info!("{} new deps to fetch", new_deps.len());
+    info!("{} stale deps to remove, {} new deps to fetch", stale.len(), new_deps.len());
+
+    // Remove stale dependency sources
+    if !stale.is_empty() {
+        cleanup_stale_deps(&dep_srcs, &stale, &index).await;
+    }
 
     // Fetch and extract only new deps
     for dep in &new_deps {
         info!("fetching sources for {dep}");
         let jars = fetch_source_jars(dep).await;
         debug!("  -> {} source jars", jars.len());
+        let Some(coord_dir) = coord_to_subdir(&dep_srcs, dep) else {
+            warn!("could not derive path for coord {dep}, skipping extraction");
+            continue;
+        };
+        if let Err(e) = tokio::fs::create_dir_all(&coord_dir).await {
+            warn!("failed to create coord dir {}: {e}", coord_dir.display());
+            continue;
+        }
         for jar in jars {
-            extract_jar_to(&jar, &dep_srcs).await;
+            extract_jar_to(&jar, &coord_dir).await;
         }
     }
 
-    // Persist updated manifest
-    if !new_deps.is_empty() {
-        let mut manifest: Vec<String> = already_resolved.into_iter().collect();
-        manifest.extend(new_deps);
+    // Persist updated manifest: (already_resolved - stale) ∪ new_deps
+    if !stale.is_empty() || !new_deps.is_empty() {
+        let mut manifest: Vec<String> = already_resolved
+            .difference(&stale)
+            .cloned()
+            .chain(new_deps.into_iter())
+            .collect();
         manifest.sort();
         let _ = tokio::fs::write(&resolved_file, manifest.join("\n") + "\n").await;
     }
