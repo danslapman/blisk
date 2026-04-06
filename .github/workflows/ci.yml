@@ -6,6 +6,8 @@ jobs:
   test:
     name: Run tests
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
     strategy:
       matrix:
         include:
