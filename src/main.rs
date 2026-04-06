@@ -1,10 +1,4 @@
-mod backend;
-mod capabilities;
-mod handlers;
-mod parsing;
-mod symbols;
-mod workspace;
-
+use blisk::backend;
 use tower_lsp::{LspService, Server};
 
 #[tokio::main]
