@@ -45,6 +45,9 @@ pub const COMMENT: &str = "comment";
 pub const BLOCK_COMMENT: &str = "block_comment";
 pub const MULTILINE_COMMENT: &str = "multiline_comment";
 
+/// Comment node kinds that can contain Scaladoc (`/** ... */`).
+pub const DOC_COMMENT_KINDS: &[&str] = &[COMMENT, BLOCK_COMMENT, MULTILINE_COMMENT];
+
 // Parameter node kinds
 pub const PARAMETERS: &str = "parameters";
 pub const PARAMETER: &str = "parameter";

@@ -3,9 +3,9 @@ use tree_sitter::{Node, Tree};
 
 use crate::parsing::doc_comments::extract_doc_comment;
 use crate::parsing::scala::{
-    node_to_range, position_to_point, DEFINITION_KINDS, PARAMETER, VAL_DEF, VAR_DEF,
+    self, node_to_range, position_to_point, DEFINITION_KINDS, PARAMETER, VAL_DEF, VAR_DEF,
 };
-use crate::symbols::{extract::kind_for_node, index::WorkspaceIndex};
+use crate::symbols::{extract::scala_kind_for_node, index::WorkspaceIndex};
 
 pub fn hover(
     tree: &Tree,
@@ -24,12 +24,12 @@ pub fn hover(
         return None;
     }
 
-    // 1. Same-file scope walk
+    // 1. Same-file scope walk (Scala only — hover is only triggered on open Scala documents)
     if let Some(h) = resolve_hover_in_file(node, source, name, index) {
         return Some(h);
     }
 
-    // 2. Cross-file index lookup
+    // 2. Cross-file index lookup (works for Java/Kotlin symbols too)
     let matches = index.lookup_by_name(name);
     if matches.is_empty() {
         return None;
@@ -88,8 +88,8 @@ fn find_hover_in_scope(
         };
 
         if def_name == Some(name) {
-            let sym_kind = kind_for_node(child_kind).unwrap_or(SymbolKind::VARIABLE);
-            let doc = extract_doc_comment(child, source);
+            let sym_kind = scala_kind_for_node(child_kind).unwrap_or(SymbolKind::VARIABLE);
+            let doc = extract_doc_comment(child, source, scala::DOC_COMMENT_KINDS);
             let markdown = format_hover(name, sym_kind, doc.as_deref(), index);
             return Some(Hover {
                 contents: HoverContents::Markup(MarkupContent {
@@ -123,7 +123,7 @@ fn format_hover(name: &str, kind: SymbolKind, doc: Option<&str>, index: &Workspa
     out
 }
 
-/// Transform Scaladoc markup into Markdown:
+/// Transform Scaladoc/Javadoc/KDoc markup into Markdown:
 /// - `{{{ ... }}}` → fenced scala code block
 /// - `[[URL desc]]` → `[desc](URL)`
 /// - `[[URL]]` → `[URL](URL)`
@@ -224,6 +224,8 @@ fn symbol_kind_label(kind: SymbolKind) -> &'static str {
         SymbolKind::CONSTANT       => "given",
         SymbolKind::ENUM           => "enum",
         SymbolKind::TYPE_PARAMETER => "type",
+        SymbolKind::METHOD         => "method",
+        SymbolKind::CONSTRUCTOR    => "constructor",
         _                          => "val",
     }
 }

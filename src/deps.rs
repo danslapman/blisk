@@ -36,7 +36,7 @@ async fn cleanup_stale_deps(dep_srcs: &Path, stale: &HashSet<String>, index: &Wo
             let coord_dir = coord_dir.clone();
             tokio::task::spawn_blocking(move || {
                 let mut out = vec![];
-                collect_scala_recursive(&coord_dir, &mut out);
+                collect_source_recursive(&coord_dir, &mut out);
                 out
             })
             .await
@@ -156,7 +156,7 @@ pub async fn fetch_dep_sources(root: &Path, index: Arc<WorkspaceIndex>) {
         let _ = tokio::fs::write(&resolved_file, manifest.join("\n") + "\n").await;
     }
 
-    // Index all .scala files under dep_srcs (fast for already-indexed files)
+    // Index all source files under dep_srcs (fast for already-indexed files)
     scan_dep_sources(&dep_srcs, index).await;
 }
 
@@ -246,7 +246,7 @@ async fn fetch_source_jars(coord: &str) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Extract `.scala` files from a source jar into `dest`.
+/// Extract `.scala`, `.java`, and `.kt` files from a source jar into `dest`.
 async fn extract_jar_to(jar: &Path, dest: &Path) {
     let jar = jar.to_path_buf();
     let dest = dest.to_path_buf();
@@ -256,7 +256,10 @@ async fn extract_jar_to(jar: &Path, dest: &Path) {
         for i in 0..archive.len() {
             let mut entry = archive.by_index(i).ok()?;
             let name = entry.name().to_string();
-            if !name.ends_with(".scala") {
+            let is_source = name.ends_with(".scala")
+                || name.ends_with(".java")
+                || name.ends_with(".kt");
+            if !is_source {
                 continue;
             }
             let out_path = dest.join(&name);
@@ -271,13 +274,13 @@ async fn extract_jar_to(jar: &Path, dest: &Path) {
     .await;
 }
 
-/// Index all `.scala` files found under `dep_srcs`.
+/// Index all source files found under `dep_srcs`.
 async fn scan_dep_sources(dep_srcs: &Path, index: Arc<WorkspaceIndex>) {
     let files = {
         let dep_srcs = dep_srcs.to_path_buf();
         tokio::task::spawn_blocking(move || {
             let mut out = vec![];
-            collect_scala_recursive(&dep_srcs, &mut out);
+            collect_source_recursive(&dep_srcs, &mut out);
             out
         })
         .await
@@ -299,15 +302,18 @@ async fn scan_dep_sources(dep_srcs: &Path, index: Arc<WorkspaceIndex>) {
     }
 }
 
-fn collect_scala_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
+fn collect_source_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect_scala_recursive(&path, out);
-        } else if path.extension().and_then(|e| e.to_str()) == Some("scala") {
+            collect_source_recursive(&path, out);
+        } else if matches!(
+            path.extension().and_then(|e| e.to_str()),
+            Some("scala" | "java" | "kt")
+        ) {
             out.push(path);
         }
     }

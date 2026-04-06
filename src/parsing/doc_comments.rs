@@ -1,16 +1,18 @@
 use tree_sitter::Node;
 
-use crate::parsing::scala::{BLOCK_COMMENT, COMMENT, MULTILINE_COMMENT};
-
 /// Walk backwards through `prev_named_sibling()` from `node`, collecting
-/// contiguous comment nodes that begin with `/**` (Scaladoc).
-/// Returns the cleaned Scaladoc text, or `None` if none is found.
-pub fn extract_doc_comment(node: Node<'_>, source: &str) -> Option<String> {
-    let doc_kinds = [COMMENT, BLOCK_COMMENT, MULTILINE_COMMENT];
+/// contiguous comment nodes that begin with `/**`.
+/// Only nodes whose kind is in `doc_comment_kinds` are considered.
+/// Returns the cleaned doc comment text, or `None` if none is found.
+pub fn extract_doc_comment(
+    node: Node<'_>,
+    source: &str,
+    doc_comment_kinds: &[&str],
+) -> Option<String> {
     let mut comments: Vec<String> = Vec::new();
     let mut sib = node.prev_named_sibling();
     while let Some(s) = sib {
-        if doc_kinds.contains(&s.kind()) {
+        if doc_comment_kinds.contains(&s.kind()) {
             let raw = &source[s.byte_range()];
             if raw.trim_start().starts_with("/**") {
                 comments.push(strip_scaladoc(raw));
@@ -31,7 +33,8 @@ pub fn extract_doc_comment(node: Node<'_>, source: &str) -> Option<String> {
 }
 
 /// Remove `/**`, `*/`, and leading `* ` or `*` from each line.
-/// `@param`, `@return`, and other Scaladoc tags are preserved verbatim.
+/// Tags such as `@param`, `@return` are preserved verbatim.
+/// Works for Scaladoc, Javadoc, and KDoc, which all use the same `/** ... */` format.
 pub fn strip_scaladoc(raw: &str) -> String {
     raw.lines()
         .map(|line| {

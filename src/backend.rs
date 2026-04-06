@@ -15,7 +15,7 @@ use crate::{
         folding, hover, references, selection, semantic_tokens, workspace_symbols,
     },
     parsing::document::Document,
-    symbols::{extract, index::WorkspaceIndex},
+    symbols::{extract, index::WorkspaceIndex, lang::SourceLanguage},
     workspace::scanner::{create_parser, scan_workspace},
 };
 
@@ -280,14 +280,19 @@ impl LanguageServer for Backend {
         // Make a snapshot of document texts for cross-file lookup
         let documents = &self.documents;
         let get_file = |file_uri: &Url| -> Option<(String, Tree)> {
-            // Try cached document first
+            // Fast path: open document (already parsed)
             if let Some(d) = documents.get(file_uri) {
                 return Some((d.text.clone(), d.tree.clone()));
             }
-            // Fall back to reading from disk
+            // Slow path: read from disk and parse with the correct language parser.
+            // This enables cross-language find-references (e.g. Java/Kotlin files in the index).
             let path = file_uri.to_file_path().ok()?;
-            let file_text = std::fs::read_to_string(path).ok()?;
-            let mut parser = create_parser()?;
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            let lang = SourceLanguage::from_extension(ext)?;
+            let file_text = std::fs::read_to_string(&path).ok()?;
+            let ts_lang = lang.tree_sitter_language();
+            let mut parser = tree_sitter::Parser::new();
+            parser.set_language(&ts_lang).ok()?;
             let file_tree = parser.parse(file_text.as_bytes(), None)?;
             Some((file_text, file_tree))
         };

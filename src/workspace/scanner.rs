@@ -4,9 +4,9 @@ use std::sync::Arc;
 use tower_lsp::lsp_types::Url;
 use tree_sitter::Parser;
 
-use crate::symbols::{extract, index::WorkspaceIndex};
+use crate::symbols::{extract, index::WorkspaceIndex, lang::SourceLanguage};
 
-/// Scan all Scala files under `root` and populate the workspace index.
+/// Scan all source files under `root` and populate the workspace index.
 /// Trees are NOT retained after scanning — only SymbolInfo records are stored.
 pub async fn scan_workspace(root: Url, index: Arc<WorkspaceIndex>) {
     let path = match root.to_file_path() {
@@ -14,7 +14,7 @@ pub async fn scan_workspace(root: Url, index: Arc<WorkspaceIndex>) {
         Err(_) => return,
     };
 
-    let files = tokio::task::spawn_blocking(move || collect_scala_files(&path))
+    let files = tokio::task::spawn_blocking(move || collect_source_files(&path))
         .await
         .unwrap_or_default();
 
@@ -38,6 +38,12 @@ pub async fn scan_workspace(root: Url, index: Arc<WorkspaceIndex>) {
 }
 
 pub(crate) async fn index_file(path: &std::path::Path, index: &WorkspaceIndex) {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let lang = match SourceLanguage::from_extension(ext) {
+        Some(l) => l,
+        None => return,
+    };
+
     let text = match tokio::fs::read_to_string(path).await {
         Ok(t) => t,
         Err(_) => return,
@@ -51,15 +57,16 @@ pub(crate) async fn index_file(path: &std::path::Path, index: &WorkspaceIndex) {
         let text = text.clone();
         let uri = uri.clone();
         move || {
-            let mut parser = match create_parser() {
-                Some(p) => p,
-                None => return vec![],
-            };
+            let ts_lang = lang.tree_sitter_language();
+            let mut parser = Parser::new();
+            if parser.set_language(&ts_lang).is_err() {
+                return vec![];
+            }
             let tree = match parser.parse(text.as_bytes(), None) {
                 Some(t) => t,
                 None => return vec![],
             };
-            extract::workspace_symbols(&tree, &text, &uri)
+            extract::workspace_symbols_for_lang(&tree, &text, &uri, lang)
         }
     })
     .await
@@ -68,7 +75,7 @@ pub(crate) async fn index_file(path: &std::path::Path, index: &WorkspaceIndex) {
     index.update_file(&uri, symbols);
 }
 
-fn collect_scala_files(root: &std::path::Path) -> Vec<PathBuf> {
+fn collect_source_files(root: &std::path::Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     collect_recursive(root, &mut files);
     files
@@ -85,13 +92,14 @@ fn collect_recursive(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
             }
             collect_recursive(&path, out);
         } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            if ext == "scala" || ext == "sc" {
+            if SourceLanguage::from_extension(ext).is_some() {
                 out.push(path);
             }
         }
     }
 }
 
+/// Create a Scala-only parser (used by the backend for open document handling).
 pub fn create_parser() -> Option<Parser> {
     let mut parser = Parser::new();
     let language: tree_sitter::Language = tree_sitter_scala::LANGUAGE.into();
