@@ -1,8 +1,15 @@
 use blisk::backend;
+use simple_logger::SimpleLogger;
 use tower_lsp::{LspService, Server};
 
 #[tokio::main]
 async fn main() {
+    SimpleLogger::new()
+        .env()
+        .with_level(log::LevelFilter::Debug)
+        .with_utc_timestamps()
+        .init()
+        .unwrap();
     let args: Vec<String> = std::env::args().collect();
     let fetch_dep_sources = args.iter().any(|a| a == "--fetch-dep-sources");
 

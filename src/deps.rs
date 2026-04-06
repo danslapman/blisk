@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use log::{debug, error, info, warn};
 use tokio::process::Command;
 
 use crate::symbols::index::WorkspaceIndex;
@@ -11,7 +12,7 @@ use crate::workspace::scanner::index_file;
 /// Unpacking is incremental: already-resolved coordinates recorded in
 /// `target/.dep-srcs/.resolved.list` are skipped.
 pub async fn fetch_dep_sources(root: &Path, index: Arc<WorkspaceIndex>) {
-    eprintln!("[blisk] fetching dep sources for {}", root.display());
+    info!("fetching dep sources for {}", root.display());
 
     // Run sbt dependencyList
     let output = match Command::new("sbt")
@@ -22,13 +23,13 @@ pub async fn fetch_dep_sources(root: &Path, index: Arc<WorkspaceIndex>) {
     {
         Ok(o) => o,
         Err(e) => {
-            eprintln!("[blisk] failed to run sbt: {e}");
+            error!("failed to run sbt: {e}");
             return;
         }
     };
     if !output.status.success() {
-        eprintln!(
-            "[blisk] sbt dependencyList failed (exit {:?}):\n{}",
+        error!(
+            "sbt dependencyList failed (exit {:?}):\n{}",
             output.status.code(),
             String::from_utf8_lossy(&output.stderr)
         );
@@ -40,7 +41,7 @@ pub async fn fetch_dep_sources(root: &Path, index: Arc<WorkspaceIndex>) {
     deps.dedup();
 
     let subprojects = fetch_subproject_names(root).await;
-    eprintln!("[blisk] subprojects: {subprojects:?}");
+    info!("subprojects: {subprojects:?}");
     let deps: Vec<String> = deps
         .into_iter()
         .filter(|coord| {
@@ -49,12 +50,12 @@ pub async fn fetch_dep_sources(root: &Path, index: Arc<WorkspaceIndex>) {
             !subprojects.contains(base)
         })
         .collect();
-    eprintln!("[blisk] found {} unique external dependencies", deps.len());
+    info!("found {} unique external dependencies", deps.len());
 
     // Create target/.dep-srcs
     let dep_srcs = root.join(".dep-srcs");
     if let Err(e) = tokio::fs::create_dir_all(&dep_srcs).await {
-        eprintln!("[blisk] failed to create {}: {e}", dep_srcs.display());
+        error!("failed to create {}: {e}", dep_srcs.display());
         return;
     }
 
@@ -73,13 +74,13 @@ pub async fn fetch_dep_sources(root: &Path, index: Arc<WorkspaceIndex>) {
         .filter(|d| !already_resolved.contains(d))
         .collect();
 
-    eprintln!("[blisk] {} new deps to fetch", new_deps.len());
+    info!("{} new deps to fetch", new_deps.len());
 
     // Fetch and extract only new deps
     for dep in &new_deps {
-        eprintln!("[blisk] fetching sources for {dep}");
+        info!("fetching sources for {dep}");
         let jars = fetch_source_jars(dep).await;
-        eprintln!("[blisk]   -> {} source jars", jars.len());
+        debug!("  -> {} source jars", jars.len());
         for jar in jars {
             extract_jar_to(&jar, &dep_srcs).await;
         }
@@ -165,13 +166,13 @@ async fn fetch_source_jars(coord: &str) -> Vec<PathBuf> {
     {
         Ok(o) => o,
         Err(e) => {
-            eprintln!("[blisk]   cs fetch failed: {e}");
+            warn!("cs fetch failed: {e}");
             return vec![];
         }
     };
     if !output.status.success() {
-        eprintln!(
-            "[blisk]   cs fetch non-zero exit for {coord}: {}",
+        warn!(
+            "cs fetch non-zero exit for {coord}: {}",
             String::from_utf8_lossy(&output.stderr).lines().next().unwrap_or("")
         );
         return vec![];
