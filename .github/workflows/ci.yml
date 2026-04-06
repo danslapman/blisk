@@ -22,7 +22,7 @@ jobs:
             artifact_name: blisk
             asset_name: blisk-macos-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - name: Run cargo test
         run: cargo test
