@@ -31,6 +31,8 @@ pub struct Backend {
     workspace_root: tokio::sync::RwLock<Option<Url>>,
     /// Whether to fetch and index dependency source jars on startup.
     retrieve_src: std::sync::atomic::AtomicBool,
+    /// Whether the client supports window/workDoneProgress.
+    window_work_done_progress: std::sync::atomic::AtomicBool,
 }
 
 impl Backend {
@@ -43,6 +45,7 @@ impl Backend {
             index: Arc::new(WorkspaceIndex::new()),
             workspace_root: tokio::sync::RwLock::new(None),
             retrieve_src: std::sync::atomic::AtomicBool::new(fetch_dep_sources),
+            window_work_done_progress: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -74,6 +77,14 @@ impl LanguageServer for Backend {
             }
         }
 
+        let wdp = params.capabilities
+            .window
+            .as_ref()
+            .and_then(|w| w.work_done_progress)
+            .unwrap_or(false);
+        self.window_work_done_progress
+            .store(wdp, std::sync::atomic::Ordering::Relaxed);
+
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
                 name: "blisk".to_string(),
@@ -103,20 +114,9 @@ impl LanguageServer for Backend {
                 if let Ok(root_path) = root.to_file_path() {
                     let index = self.index.clone();
                     let client = self.client.clone();
+                    let wdp = self.window_work_done_progress.load(std::sync::atomic::Ordering::Relaxed);
                     tokio::spawn(async move {
-                        client
-                            .log_message(
-                                MessageType::INFO,
-                                "blisk: fetching dependency sources...",
-                            )
-                            .await;
-                        crate::deps::fetch_dep_sources(&root_path, index).await;
-                        client
-                            .log_message(
-                                MessageType::INFO,
-                                "blisk: dependency sources ready",
-                            )
-                            .await;
+                        crate::deps::fetch_dep_sources(&root_path, index, Some(client), wdp).await;
                     });
                 }
             }

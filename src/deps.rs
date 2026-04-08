@@ -4,9 +4,95 @@ use std::sync::Arc;
 
 use log::{debug, error, info, warn};
 use tokio::process::Command;
+use tower_lsp::lsp_types::{
+    notification, request, MessageType, NumberOrString, ProgressParams, ProgressParamsValue,
+    WorkDoneProgress, WorkDoneProgressBegin, WorkDoneProgressCreateParams, WorkDoneProgressEnd,
+    WorkDoneProgressReport,
+};
+use tower_lsp::Client;
 
 use crate::symbols::index::WorkspaceIndex;
 use crate::workspace::scanner::index_file;
+
+/// Reports dep-fetch progress to the editor via WDP or log_message.
+/// When `client` is None (standalone CLI mode), all calls are no-ops.
+struct DepProgress {
+    client: Option<Client>,
+    token: NumberOrString,
+    wdp: bool,
+}
+
+impl DepProgress {
+    async fn begin(&self, title: &str, message: &str) {
+        let Some(client) = &self.client else { return };
+        if self.wdp {
+            let _ = client
+                .send_request::<request::WorkDoneProgressCreate>(WorkDoneProgressCreateParams {
+                    token: self.token.clone(),
+                })
+                .await;
+            client
+                .send_notification::<notification::Progress>(ProgressParams {
+                    token: self.token.clone(),
+                    value: ProgressParamsValue::WorkDone(WorkDoneProgress::Begin(
+                        WorkDoneProgressBegin {
+                            title: title.to_string(),
+                            message: Some(message.to_string()),
+                            percentage: Some(0),
+                            cancellable: Some(false),
+                        },
+                    )),
+                })
+                .await;
+        } else {
+            client
+                .log_message(MessageType::INFO, format!("blisk: {title} — {message}"))
+                .await;
+        }
+    }
+
+    async fn report(&self, message: &str, percentage: u32) {
+        let Some(client) = &self.client else { return };
+        if self.wdp {
+            client
+                .send_notification::<notification::Progress>(ProgressParams {
+                    token: self.token.clone(),
+                    value: ProgressParamsValue::WorkDone(WorkDoneProgress::Report(
+                        WorkDoneProgressReport {
+                            message: Some(message.to_string()),
+                            percentage: Some(percentage),
+                            cancellable: Some(false),
+                        },
+                    )),
+                })
+                .await;
+        } else {
+            client
+                .log_message(MessageType::INFO, format!("blisk: {message}"))
+                .await;
+        }
+    }
+
+    async fn end(&self, message: &str) {
+        let Some(client) = &self.client else { return };
+        if self.wdp {
+            client
+                .send_notification::<notification::Progress>(ProgressParams {
+                    token: self.token.clone(),
+                    value: ProgressParamsValue::WorkDone(WorkDoneProgress::End(
+                        WorkDoneProgressEnd {
+                            message: Some(message.to_string()),
+                        },
+                    )),
+                })
+                .await;
+        } else {
+            client
+                .log_message(MessageType::INFO, format!("blisk: {message}"))
+                .await;
+        }
+    }
+}
 
 /// Derive the extraction subdirectory for a coordinate.
 /// e.g. "org.typelevel:cats-core_3:2.9.0" → `<dep_srcs>/org.typelevel/cats-core_3/2.9.0`
@@ -55,11 +141,26 @@ async fn cleanup_stale_deps(dep_srcs: &Path, stale: &HashSet<String>, index: &Wo
     }
 }
 
-/// Fetch, extract and index dependency sources into `<root>/target/.dep-srcs/`.
+/// Fetch, extract and index dependency sources into `<root>/.dep-srcs/`.
 /// Unpacking is incremental: already-resolved coordinates recorded in
-/// `target/.dep-srcs/.resolved.list` are skipped.
-pub async fn fetch_dep_sources(root: &Path, index: Arc<WorkspaceIndex>) {
+/// `.dep-srcs/.resolved.list` are skipped.
+///
+/// `client` is None in standalone CLI mode; progress notifications are skipped then.
+pub async fn fetch_dep_sources(root: &Path, index: Arc<WorkspaceIndex>, client: Option<Client>, wdp: bool) {
     info!("fetching dep sources for {}", root.display());
+
+    let progress = DepProgress {
+        client,
+        token: NumberOrString::String("blisk/fetch-deps".to_string()),
+        wdp,
+    };
+
+    progress
+        .begin(
+            "Fetching dependency sources",
+            "Running sbt dependencyList...",
+        )
+        .await;
 
     // Run sbt dependencyList
     let output = match Command::new("sbt")
@@ -71,6 +172,7 @@ pub async fn fetch_dep_sources(root: &Path, index: Arc<WorkspaceIndex>) {
         Ok(o) => o,
         Err(e) => {
             error!("failed to run sbt: {e}");
+            progress.end("Failed to run sbt").await;
             return;
         }
     };
@@ -80,12 +182,17 @@ pub async fn fetch_dep_sources(root: &Path, index: Arc<WorkspaceIndex>) {
             output.status.code(),
             String::from_utf8_lossy(&output.stderr)
         );
+        progress.end("sbt dependencyList failed").await;
         return;
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut deps = parse_dependency_list(&stdout);
     deps.sort();
     deps.dedup();
+
+    progress
+        .report(&format!("Parsed {} dependencies", deps.len()), 10)
+        .await;
 
     let subprojects = fetch_subproject_names(root).await;
     info!("subprojects: {subprojects:?}");
@@ -99,10 +206,11 @@ pub async fn fetch_dep_sources(root: &Path, index: Arc<WorkspaceIndex>) {
         .collect();
     info!("found {} unique external dependencies", deps.len());
 
-    // Create target/.dep-srcs
+    // Create .dep-srcs
     let dep_srcs = root.join(".dep-srcs");
     if let Err(e) = tokio::fs::create_dir_all(&dep_srcs).await {
         error!("failed to create {}: {e}", dep_srcs.display());
+        progress.end("Failed to create .dep-srcs directory").await;
         return;
     }
 
@@ -127,9 +235,21 @@ pub async fn fetch_dep_sources(root: &Path, index: Arc<WorkspaceIndex>) {
         cleanup_stale_deps(&dep_srcs, &stale, &index).await;
     }
 
+    let n = new_deps.len();
+    if n > 0 {
+        progress
+            .report(&format!("Fetching {n} new dependencies..."), 20)
+            .await;
+    }
+
     // Fetch and extract only new deps
-    for dep in &new_deps {
+    for (i, dep) in new_deps.iter().enumerate() {
         info!("fetching sources for {dep}");
+        let artifact = dep.split(':').nth(1).unwrap_or(dep);
+        let pct = 20 + (60 * (i + 1) / n.max(1)) as u32;
+        progress
+            .report(&format!("[{}/{n}] {artifact}", i + 1), pct)
+            .await;
         let jars = fetch_source_jars(dep).await;
         debug!("  -> {} source jars", jars.len());
         let Some(coord_dir) = coord_to_subdir(&dep_srcs, dep) else {
@@ -156,8 +276,12 @@ pub async fn fetch_dep_sources(root: &Path, index: Arc<WorkspaceIndex>) {
         let _ = tokio::fs::write(&resolved_file, manifest.join("\n") + "\n").await;
     }
 
+    progress.report("Indexing dependency sources...", 80).await;
+
     // Index all source files under dep_srcs (fast for already-indexed files)
     scan_dep_sources(&dep_srcs, index).await;
+
+    progress.end("Dependency sources ready").await;
 }
 
 /// Run `sbt projects` and return the set of local subproject names (e.g. "oolong-core").

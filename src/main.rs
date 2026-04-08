@@ -19,7 +19,7 @@ async fn main() {
         if let Some(path) = args.iter().skip_while(|a| *a != "--fetch-dep-sources").nth(1) {
             let root = std::path::PathBuf::from(path);
             let index = std::sync::Arc::new(blisk::symbols::index::WorkspaceIndex::new());
-            blisk::deps::fetch_dep_sources(&root, index).await;
+            blisk::deps::fetch_dep_sources(&root, index, None, false).await;
             return;
         }
     }
